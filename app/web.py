@@ -19,5 +19,12 @@ def api(stage):
 def page(stage,template):
     latest=store.history();state=store.get(latest[0]['id']) if latest else run(load('dirty.csv'),{})
     source=load(request.args['sample']) if 'sample' in request.args else base64.b64decode(state['source_b64']) if state.get('source_b64') else load('dirty.csv')
-    data=run(source,state.get('manifest',{}).get('parameters',{}),stage)
-    return render_template(template,title=TITLE,short=SHORT,modules=MODULES,current=stage,data=data,run=state,history=latest)
+    parameters=state.get('manifest',{}).get('parameters',{})
+    data=run(source,parameters,stage)
+    stored=None;events=[]
+    if data.get('payroll'):
+        key=data['payroll']['current']['batch_key']
+        try:stored=store.batch(key);events=store.events(key)
+        except DomainError:stored=None
+    return render_template(template,title=TITLE,short=SHORT,modules=MODULES,current=stage,data=data,run=state,history=latest,
+        history_batches=store.batches(),batch_events=events,stored=stored)

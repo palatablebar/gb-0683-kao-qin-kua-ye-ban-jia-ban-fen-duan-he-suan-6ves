@@ -1,0 +1,147 @@
+{% extends "base.html" %}{% block content %}
+{% set p = data.payroll %}
+{% set b = p.current %}
+{% set r = b.reconcile %}
+<div class="sheet-layout">
+  <section class="panel sheet">
+    <header><h2>可重放计薪批次</h2><span>{{b.batch_id}} · {{b.period}}{% if stored %} · 第{{stored.generation}}代 · {{stored.status}}{% endif %}</span></header>
+    <div class="batch-strip">
+      <div><label>批次状态</label><b class="state-{{'ok' if stored and stored.status in ('待封存','已封存') else 'bad'}}">{{stored.status if stored else b.status}}</b>{% if stored and stored.status=='待封存' %}<small class="mono">可封存</small>{% endif %}</div>
+      <div><label>应付合计 CNY</label><b>{{b.total}}</b></div>
+      <div><label>重算合计 CNY</label><b>{{r.recomputed_total}}</b></div>
+      <div><label>对平差额</label><b>{{r.difference}}</b></div>
+      <div><label>片段 / 应付</label><b>{{r.segment_count}} / {{r.payable_count}}</b></div>
+      <div><label>在途班次</label><b>{{b.carry_in|length}}</b></div>
+      <div><label>重放</label><b class="state-{{'ok' if b.replay.matches else 'bad'}}">{{'逐项一致' if b.replay.matches else '存在差异'}}</b></div>
+      <div><label>封存状态</label><b class="state-{{'ok' if stored and stored.sealed_at else ''}}">{{stored.status if stored else '未登记'}}</b></div>
+    </div>
+    <div class="switch-line">
+      <span class="tag">规则切换</span>
+      <span>{{p.switch.status}} · 保留 {{p.switch.retained}} · 生效版本 {{p.rule_versions|join(' → ')}}</span>
+      {% if p.switch.status == '失败' %}<span class="error">{{p.switch.code}} {{p.switch.message}}（沿用旧版，不阻断旧批）</span>{% endif %}
+      <span class="mono">registry {{p.rule_registry_digest}} · evidence {{b.evidence_digest[:16]}}</span>
+    </div>
+    {% if not r.balanced %}<div class="alert">应付未与批次总额对平，不可封存：{{r.problems|join('；')}}</div>{% endif %}
+    <div class="scroll tall">
+      <table class="ledger">
+        <thead><tr class="letters"><th></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>F</th><th>G</th></tr>
+        <tr><th>#</th><th>应付ID</th><th>员工</th><th>切换依据</th><th>规则版本</th><th>片段</th><th>分钟 × 倍率</th><th>金额</th></tr></thead>
+        <tbody>
+        {% for row in b.payables %}
+          <tr>
+            <td class="rownum">{{loop.index}}</td>
+            <td class="mono" tabindex="0">{{row.payable_id}}</td>
+            <td tabindex="0">{{row.employee}}</td>
+            <td class="mono">{{row.basis_id}}</td>
+            <td>{{row.rule_version}}</td>
+            <td class="mono" title="{{row.segment_ref}}">{{row.calendar_day}} {{row.start[11:16]}}–{{row.end[11:16]}}</td>
+            <td class="num">{{row.minutes}} × {{row.multiplier}} <span class="state {{row.code|lower}}">{{row.code}}</span></td>
+            <td class="num">{{row.amount}}</td>
+          </tr>
+        {% else %}<tr><td colspan="8">本期没有应付</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel side">
+    <header><h2>批次操作</h2></header>
+    <div class="button-row column">
+      {% if not stored or stored.status == '待封存' %}<button id="seal" data-key="{{b.batch_key}}" {{'disabled' if not b.reconcile.balanced or b.reconcile.empty else ''}}>封存本期批次</button>{% else %}<span class="badge">{{stored.status}}，不可重复封存</span>{% endif %}
+      <a href="/api/batches/{{b.batch_key}}/export.csv">导出本批证据</a>
+      <a href="/api/batches/{{b.batch_key}}/replay">重放校验</a>
+    </div>
+    <dl>
+      <dt>批次键</dt><dd class="mono small">{{b.batch_key[:18]}}</dd>
+      <dt>证据摘要</dt><dd class="mono small">{{b.evidence_digest[:18]}}</dd>
+      <dt>规则摘要</dt><dd class="mono small">{{b.rule_registry_digest}}</dd>
+      <dt>重放合计</dt><dd>{{b.replay.replay_total}}</dd>
+      <dt>差异项</dt><dd>{{b.replay.differences|length}}</dd>
+    </dl>
+    <div class="panel-note">重跑同源输入复用同一批次；补卡或规则更新生成新批次，旧批次标记作废但保留证据与切换依据。应付未与批次总额对平不封存，切换失败保留旧版。</div>
+  </section>
+
+  <section class="panel wide">
+    <header><h2>班次 → 规则绑定（切换依据）</h2><span>{{b.bindings|length}} 班</span></header>
+    <div class="scroll">
+      <table class="ledger compact">
+        <thead><tr><th>员工</th><th>归属日</th><th>工作区间</th><th>切换点</th><th>绑定规则</th><th>计入期间</th><th>判定</th></tr></thead>
+        <tbody>
+        {% for x in b.bindings %}
+          <tr>
+            <td tabindex="0">{{x.employee}}</td>
+            <td>{{x.attribution_day}}</td>
+            <td class="mono">{{x.work_start[5:16]}} → {{x.work_end[5:16]}}</td>
+            <td class="mono">{{x.cutover[5:16] if x.cutover else '—'}}</td>
+            <td>{{x.bound_rule}}</td>
+            <td>{{x.settle_period}}</td>
+            <td title="{{x.reason}}">{% if x.in_flight %}<span class="badge warn">在途</span>{% endif %}{{x.decision}}</td>
+          </tr>
+        {% else %}<tr><td colspan="7">无班次</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if b.deferred_out %}
+  <section class="panel wide">
+    <header><h2>本期不重复计薪（已转出）</h2><span>{{b.deferred_out|length}} 班</span></header>
+    <div class="scroll">
+      <table class="ledger compact">
+        <thead><tr><th>员工</th><th>班次</th><th>切换点</th><th>绑定规则</th><th>实际计入</th></tr></thead>
+        <tbody>
+        {% for x in b.deferred_out %}
+          <tr><td>{{x.employee}}</td><td class="mono">{{x.shift_id}}</td><td class="mono">{{x.cutover[5:16]}}</td><td>{{x.bound_rule}}</td><td>{{x.settle_period}}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-note">班次完成时点跨过切换点，整班只在新期间计一次；本期间只登记转出依据，不生成应付。</div>
+  </section>
+  {% endif %}
+
+  {% if p.batches|length > 1 %}
+  <section class="panel wide">
+    <header><h2>本运行产生的期间批次</h2><span>{{p.batches|length}}</span></header>
+    <div class="scroll">
+      <table class="ledger compact">
+        <thead><tr><th>期间</th><th>批次</th><th>班次</th><th>应付合计</th><th>重算</th><th>本期待结算</th><th>状态</th></tr></thead>
+        <tbody>
+        {% for x in p.batches %}
+          <tr><td>{{x.period}}</td><td class="mono">{{x.batch_id}}</td><td class="num">{{x.bindings|length}}</td><td class="num">{{x.total}}</td><td class="num">{{x.replay.replay_total if x.replay else x.reconcile.recomputed_total}}</td><td>{% if x.deferred_out %}<span class="badge warn">{{x.deferred_out|length}} 班转出</span>{% else %}—{% endif %}</td><td>{{x.status}}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="panel wide">
+    <header><h2>历史批次世代（存储）</h2><span>作废不删除</span></header>
+    <div class="scroll">
+      <table class="ledger compact">
+        <thead><tr><th>期间</th><th>批次</th><th>代</th><th>状态</th><th>应付合计</th><th>作废指向</th><th>封存时间</th></tr></thead>
+        <tbody>
+        {% for x in history_batches %}
+          <tr><td>{{x.period}}</td><td class="mono" tabindex="0">{{x.batch_id}}</td><td class="num">{{x.generation}}</td><td>{{x.status}}</td><td class="num">{{x.body.total}}</td><td class="mono">{{x.superseded_by[:18] if x.superseded_by else '—'}}</td><td class="mono">{{x.sealed_at[:19] if x.sealed_at else '—'}}</td></tr>
+        {% else %}<tr><td colspan="7">尚无已登记的计薪批次</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel wide">
+    <header><h2>批次事件流水</h2><span>{{batch_events|length}}</span></header>
+    <div class="scroll">
+      <table class="ledger compact">
+        <thead><tr><th>事件</th><th>时间 UTC</th><th>明细</th></tr></thead>
+        <tbody>
+        {% for e in batch_events %}
+          <tr><td>{{e.event}}</td><td class="mono">{{e.at[:19]}}</td><td class="mono wrap">{{e.detail}}</td></tr>
+        {% else %}<tr><td colspan="3">当前批次尚未登记（提交运行后写入）</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% include "exceptions.html" %}
+</div>
+{% endblock %}

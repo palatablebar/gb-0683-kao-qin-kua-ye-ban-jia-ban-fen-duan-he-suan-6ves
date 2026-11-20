@@ -5,7 +5,8 @@ from app.errors import DomainError
 from app.workflow import run,load
 from app import store
 from app.web import payload
-from app.modules.m7_archive.export_out import bundle
+from app.modules.m7_archive.export_out import batch_bundle, bundle
+from app.payroll.batch import replay
 
 def create_app():
     app=Flask(__name__);app.config['MAX_CONTENT_LENGTH']=2_000_000
@@ -35,10 +36,31 @@ def create_app():
         state=store.get(run_id)
         if not state.get('reconcile',{}).get('balanced'):raise DomainError('UNBALANCED','对账未平')
         return Response(bundle(state),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename=evidence.csv'})
+    @app.get('/api/batches')
+    def batch_list():
+        return jsonify(store.batches(request.args.get('period')))
+    @app.get('/api/batches/<key>')
+    def batch_detail(key):
+        item=store.batch(key);return jsonify(batch=item,events=store.events(item['key']))
+    @app.get('/api/batches/<key>/replay')
+    def batch_replay(key):
+        return jsonify(replay(store.batch(key)['body']))
+    @app.get('/api/batches/<key>/export.csv')
+    def batch_export(key):
+        item=store.batch(key)
+        return Response(batch_bundle(item),mimetype='text/csv; charset=utf-8',
+            headers={'Content-Disposition':'attachment; filename='+item['batch_id']+'.csv'})
+    @app.post('/api/batches/<key>/seal')
+    def batch_seal(key):
+        return jsonify(store.seal(key))
+    @app.get('/api/periods/<period>/totals')
+    def period_totals(period):
+        return jsonify(store.period_totals(period))
     with app.app_context():
         if not store.history():
             state=run(load('dirty.csv'),{});store.save(state['run_id'],state)
     return app
+
 
 app=create_app()
 if __name__=='__main__':app.run(host='0.0.0.0',port=8000)

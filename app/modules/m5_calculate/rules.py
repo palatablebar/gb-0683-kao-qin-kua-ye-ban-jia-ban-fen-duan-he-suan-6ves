@@ -1,23 +1,42 @@
-from datetime import date
-from decimal import Decimal,ROUND_HALF_UP
-from collections import defaultdict
+from decimal import Decimal
 
-def price(segments,holidays):
-    normal_used=defaultdict(int);out=[]
-    for s in sorted(segments,key=lambda r:(r['start'],r['employee'])):
-        d=date.fromisoformat(s['calendar_day']);key=(s['employee'],s['calendar_day']);minutes=s['minutes'];rate=Decimal(str(s['rate']))
-        if s['calendar_day'] in holidays:parts=[(minutes,Decimal(3),'HOLIDAY')]
-        elif d.weekday()>=5:parts=[(minutes,Decimal(2),'REST')]
-        else:
-            regular=min(minutes,max(0,480-normal_used[key]));normal_used[key]+=minutes
-            parts=[(regular,Decimal(1),'REGULAR'),(minutes-regular,Decimal('1.5'),'OVERTIME')]
-        for count,multiplier,code in parts:
-            if count:
-                item=dict(s);item.update(minutes=count,multiplier=str(multiplier),code=code,amount=str((rate*count*multiplier/60).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)));out.append(item)
-    return out
+from app.payroll.batch import build
+from app.payroll.pricing import money, price_segments
+
+# Re-exported for direct unit tests of the pricing kernel.
+__all__ = ['price', 'price_segments', 'apply']
+
+
+def price(segments, holidays):
+    rule = {'version': 'test', 'daily_minutes': 480, 'holidays': sorted(holidays),
+            'multipliers': {'REGULAR': '1', 'OVERTIME': '1.5', 'REST': '2', 'HOLIDAY': '3'}}
+    return price_segments(segments, rule)
+
 
 def apply(state):
-    holidays=set(state['parameters'].get('holidays',['2026-10-01']))
-    calculations=price(state['segments'],holidays)
-    total=sum((Decimal(r['amount']) for r in calculations),Decimal(0));paid=sum((Decimal(str(r['paid'])) for r in state['rows']),Decimal(0))
-    state['calculations']=calculations;state['business']={'total':str(total),'paid':str(paid),'difference':str(total-paid),'minutes':sum(r['minutes'] for r in calculations),'unit':'CNY'};return state
+    payroll = build(state)
+    batches = payroll['batches']
+    # Every segment belongs to exactly one batch, so concatenating payables of
+    # all batches of this run counts each piece of work once.
+    calculations = [item for batch in batches for item in batch['payables']]
+    total = money(sum((Decimal(str(item['amount'])) for item in calculations), Decimal('0')))
+    paid = sum((Decimal(str(row['paid'])) for row in state['rows']), Decimal('0'))
+    featured = payroll['current']
+    state['payroll'] = payroll
+    state['calculations'] = calculations
+    state['business'] = {
+        'total': str(total),
+        'paid': str(paid),
+        'difference': str(money(total - paid)),
+        'minutes': sum(int(item['minutes']) for item in calculations),
+        'unit': 'CNY',
+        'period': featured['period'],
+        'batch_id': featured['batch_id'],
+        'batch_total': featured['total'],
+        'batch_balanced': featured['reconcile']['balanced'],
+        'batches': [{'period': batch['period'], 'batch_id': batch['batch_id'],
+                     'total': batch['total'], 'status': batch['status'],
+                     'balanced': batch['reconcile']['balanced']} for batch in batches],
+        'featured': featured['period'],
+    }
+    return state

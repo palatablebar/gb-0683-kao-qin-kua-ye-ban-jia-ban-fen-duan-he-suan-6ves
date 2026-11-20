@@ -13,6 +13,7 @@
 | M5 工时切段 | 查看并复算工时切段 | `/api/m5_calculate` | `app/modules/m5_calculate/rules.py` | `tests/test_calculate.py` |
 | M6 薪资对账 | 查看并复算薪资对账 | `/api/m6_reconcile` | `app/modules/m6_reconcile/compare.py` | `tests/test_reconcile.py` |
 | M7 周期归档 | 查看并复算周期归档 | `/api/m7_archive` | `app/modules/m7_archive/export_out.py` | `tests/test_archive.py` |
+| M8 计薪批次 | 裁决在途班次、重放与封存 | `/api/m8_batch` | `app/payroll/batch.py` | `tests/test_batch.py` |
 
 ## 陷阱登记
 
@@ -31,10 +32,16 @@
 | TRAP-26 | 旧版本复核 | 覆盖新结论 | 事务条件更新 | `app/store.py` | `tests/test_archive.py::test_stale_review` |
 | TRAP-23 | 休息与跨夜端点 | 重复或漏计 | 半开区间切片 | `app/modules/m4_segments/rules.py` | `tests/test_segments.py::test_break_removed` |
 | TRAP-19 | 假日与周末重叠 | 费率相加 | 假日优先 | `app/modules/m5_calculate/rules.py` | `tests/test_calculate.py::test_holiday_overrides_rest` |
+| TRAP-31 | 规则切换跨在途班次 | 整班沿用旧规或按时点拆两套规则 | 整班绑定完成时点版本，单版本单期间计入 | `app/payroll/policy.py` | `tests/test_batch.py::test_crossing_shift_binds_one_version` |
+| TRAP-32 | 旧账重放 | 覆盖旧批次 | 新代批次+旧批作废保留+事件流水 | `app/store.py` | `tests/test_batch.py::test_correction_invalidates_old_batch_and_keeps_it` |
+| TRAP-33 | 重跑重复计薪 | 每次插入新应付 | 批次键幂等+期间仅统计有效代 | `app/store.py` | `tests/test_batch.py::test_rerun_same_source_stores_one_batch` |
+| TRAP-34 | 切换参数非法 | 半切换状态 | 保留旧注册表，批本身份不变 | `app/payroll/policy.py` | `tests/test_batch.py::test_rejected_switch_leaves_old_batch_untouched` |
+| TRAP-35 | 应付与总额不平 | 直接导出封存 | 交叉复核+封存拒绝 | `app/payroll/batch.py` | `tests/test_batch.py::test_unbalanced_batch_cannot_be_sealed` |
 
 ## 对账规则
 
 输入行数=采纳+隔离+空行+重复表头+完全重复；业务总数与计算证据独立求和。隔离行保留来源行、ID、原因码与原值。
+批次内：片段必被计薪、分钟守恒、每片段单一规则版本、应付合计等于批次总额；期间应付合计只汇总非作废世代。
 
 ## 已知不覆盖
 
